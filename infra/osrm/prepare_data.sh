@@ -4,8 +4,15 @@
 # OSRM (perfil "driving" estandar, ver seccion 4 del spec para la funcion de
 # costo custom que se sumara en fases posteriores).
 #
-# Requiere: docker
+# Requiere: docker, osmium-tool (apt install osmium-tool).
+#
+# La imagen de OSRM a usar es configurable via OSRM_IMAGE (default:
+# osrm/osrm-backend, que solo existe para amd64). En arquitectura arm64
+# (ej. Oracle Cloud Ampere) hay que compilarla antes desde codigo fuente
+# — ver infra/oracle-cloud-init.sh — y pasar OSRM_IMAGE=rutasegura-osrm:<tag>.
 set -euo pipefail
+
+OSRM_IMAGE="${OSRM_IMAGE:-osrm/osrm-backend}"
 
 DATA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/data"
 mkdir -p "$DATA_DIR"
@@ -22,17 +29,16 @@ if [ ! -f argentina-latest.osm.pbf ]; then
 fi
 
 echo "Recortando al bounding box de AMBA ($AMBA_BBOX)..."
-docker run --rm -v "$DATA_DIR:/data" osmium/osmium-tool \
-  osmium extract -b "$AMBA_BBOX" /data/argentina-latest.osm.pbf -o /data/amba.osm.pbf --overwrite
+osmium extract -b "$AMBA_BBOX" argentina-latest.osm.pbf -o amba.osm.pbf --overwrite
 
-echo "Generando datos de ruteo OSRM (perfil driving)..."
-docker run --rm -v "$DATA_DIR:/data" osrm/osrm-backend \
+echo "Generando datos de ruteo OSRM (perfil driving) con la imagen $OSRM_IMAGE..."
+docker run --rm -v "$DATA_DIR:/data" "$OSRM_IMAGE" \
   osrm-extract -p /opt/car.lua /data/amba.osm.pbf
 
-docker run --rm -v "$DATA_DIR:/data" osrm/osrm-backend \
+docker run --rm -v "$DATA_DIR:/data" "$OSRM_IMAGE" \
   osrm-partition /data/amba.osrm
 
-docker run --rm -v "$DATA_DIR:/data" osrm/osrm-backend \
+docker run --rm -v "$DATA_DIR:/data" "$OSRM_IMAGE" \
   osrm-customize /data/amba.osrm
 
 echo "Listo. Los datos quedaron en $DATA_DIR — levantar con docker compose up osrm."

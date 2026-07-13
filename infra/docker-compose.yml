@@ -9,17 +9,18 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
+    # Sin "ports": solo se accede via la red interna de Docker (backend
+    # habla con "postgres:5432"). No hace falta exponerlo al host, y menos
+    # todavia en un servidor con IP publica como la VM de Oracle Cloud.
 
   osrm:
-    image: osrm/osrm-backend
+    image: ${OSRM_IMAGE:-osrm/osrm-backend}
     restart: unless-stopped
     command: osrm-routed --algorithm mld /data/amba.osrm
     volumes:
       - ./osrm/data:/data
-    ports:
-      - "5001:5000"
+    # Idem postgres: solo lo consume "backend" via la red interna
+    # ("osrm:5000"), no necesita puerto publicado al host.
 
   backend:
     build: ../backend

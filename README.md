@@ -49,9 +49,12 @@ Requiere Docker.
    ```
 
    Esto levanta:
-   - `postgres` (PostgreSQL + PostGIS) en `localhost:5432`
-   - `osrm` (motor de ruteo) en `localhost:5001`
-   - `backend` (API FastAPI) en `localhost:8000`
+   - `postgres` (PostgreSQL + PostGIS) — solo accesible desde otros
+     contenedores de la red interna, no publicado al host.
+   - `osrm` (motor de ruteo) — idem, solo lo consume `backend` internamente.
+   - `backend` (API FastAPI) en `localhost:8000` — el único puerto expuesto,
+     porque es el único que necesita ser alcanzable desde afuera (la app
+     móvil, o internet en el caso de un deploy real).
 
    El scraper de X es un servicio aparte, ver sección propia más abajo —
    no se levanta por defecto (`docker compose up` no lo incluye).
@@ -157,12 +160,92 @@ Funcionalidad ya implementada en la app:
   trayecto y la sube a `/trips` al terminar, para alimentar los perfiles
   de congestión.
 
-## Deploy de referencia
+## Deploy en Oracle Cloud (free tier)
 
-- **Motor de ruteo + backend**: Oracle Cloud free tier (VM gratuita
-  indefinida), corriendo el mismo `docker-compose.yml` de `infra/`.
-- **Distribución a los primeros 4 usuarios**: Firebase App Distribution
-  (gratis, sin pasar por Google Play).
+El backend corre en una VM **Ampere A1 (arm64)** del Always Free tier de
+Oracle Cloud — no la VM AMD (`VM.Standard.E2.1.Micro`), que solo tiene 1GB
+de RAM (muy poco para Postgres+OSRM+backend juntos). La imagen oficial de
+OSRM en Docker Hub solo existe para amd64, así que en la VM Ampere se
+compila desde código fuente (ver `infra/oracle-cloud-init.sh`) — el propio
+Dockerfile del proyecto ya soporta arm64 nativamente, solo hay que
+construirlo ahí. Esto es automático via cloud-init, pero tarda entre
+**30 y 90 minutos** en el primer arranque (compila Boost/TBB desde cero).
+
+### 1. Crear la cuenta
+
+Entrar a [cloud.oracle.com](https://www.oracle.com/cloud/free/) y crear una
+cuenta gratuita. Pide verificación de identidad y una tarjeta (no cobra
+nada mientras te quedes en los límites "Always Free").
+
+### 2. Crear la instancia de cómputo
+
+En la consola de OCI: **Compute → Instances → Create Instance**.
+
+- **Name**: `rutasegura-backend` (o lo que prefieras).
+- **Image**: Ubuntu 24.04 (o 22.04), variante **aarch64**.
+- **Shape**: cambiar a **Ampere · VM.Standard.A1.Flex**, y subir a
+  **4 OCPUs / 24 GB de RAM** (el máximo permitido en Always Free) — así el
+  build de OSRM es lo más rápido posible y sobra memoria para el resto.
+- **Add SSH keys**: subí tu clave pública (`~/.ssh/id_ed25519.pub` o la que
+  uses) para poder entrar por SSH vos mismo más adelante. Si no tenés una,
+  generala con `ssh-keygen -t ed25519` antes de este paso.
+- **Show advanced options → Management → Cloud-init script**: pegar el
+  contenido completo de [`infra/oracle-cloud-init.sh`](infra/oracle-cloud-init.sh).
+
+Crear la instancia y anotar la **IP pública** que le asigna Oracle.
+
+### 3. Abrir el puerto 8000
+
+Por defecto solo el puerto 22 (SSH) está abierto. Hay que agregar una regla
+de ingreso para el puerto 8000 (el backend):
+
+**Networking → Virtual Cloud Networks → (tu VCN) → Security Lists** (o
+**Network Security Groups** si la instancia usa uno) → **Add Ingress Rules**:
+
+- Source CIDR: `0.0.0.0/0`
+- IP Protocol: TCP
+- Destination Port Range: `8000`
+
+El cloud-init script también abre el puerto en el firewall interno de la
+VM (`iptables`), que en las imágenes Ubuntu de Oracle viene bloqueando todo
+excepto SSH por defecto — hace falta lo uno *y* lo otro.
+
+### 4. Esperar el bootstrap y verificar
+
+Conectate por SSH (`ssh ubuntu@<IP-PUBLICA>`) y mirá el progreso:
+
+```bash
+tail -f /var/log/rutasegura-setup.log
+```
+
+Cuando termine (línea `RutaSegura: bootstrap terminado`), probar desde
+cualquier navegador (incluido el del celular):
+
+```
+http://<IP-PUBLICA>:8000/health
+```
+
+Debería devolver `{"status":"ok"}`.
+
+### 5. Apuntar la app al backend real
+
+Reconstruir el APK con la IP real (ver sección de la app móvil más abajo
+o pedirle a Claude que dispare el workflow de `Build APK` con
+`api_base_url=http://<IP-PUBLICA>:8000`).
+
+### Actualizaciones futuras
+
+Este deploy es manual (sin CI/CD): para actualizar el backend después de
+un cambio de código, entrar por SSH y correr:
+
+```bash
+cd /opt/rutasegura && git pull && cd infra && docker compose up -d --build
+```
+
+### Distribución a los primeros usuarios
+
+Firebase App Distribution (gratis, sin pasar por Google Play) para los 4
+usuarios iniciales — ver sección 8 del spec.
 
 ## Qué falta
 
