@@ -15,6 +15,12 @@ class LocationService {
   }
 
   Stream<LatLng> watchLocation() async* {
+    yield* watchPositions().map((position) => LatLng(position.latitude, position.longitude));
+  }
+
+  /// Stream de posiciones crudas (incluye velocidad en m/s), usado para
+  /// grabar el historial de congestion de un trayecto (seccion 5 del spec).
+  Stream<Position> watchPositions() async* {
     final permission = await _ensurePermission();
     if (!permission) {
       throw Exception('Permiso de ubicacion denegado');
@@ -25,7 +31,7 @@ class LocationService {
         accuracy: LocationAccuracy.high,
         distanceFilter: 10,
       ),
-    ).map((position) => LatLng(position.latitude, position.longitude));
+    );
   }
 
   Future<bool> _ensurePermission() async {

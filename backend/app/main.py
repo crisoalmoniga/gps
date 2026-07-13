@@ -3,9 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import Base, engine
-from .routers import reports, routing
+from .routers import analysis, mentions, reports, risk_zones, routing, trips
 
-app = FastAPI(title="RutaSegura API", version="0.1.0")
+app = FastAPI(title="RutaSegura API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,6 +17,10 @@ app.add_middleware(
 
 app.include_router(reports.router)
 app.include_router(routing.router)
+app.include_router(trips.router)
+app.include_router(risk_zones.router)
+app.include_router(mentions.router)
+app.include_router(analysis.router)
 
 
 @app.on_event("startup")

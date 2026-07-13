@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart' show Position;
 import 'package:latlong2/latlong.dart';
 
 import '../models/incident_report.dart';
+import '../models/risk_zone.dart';
 import '../models/route_result.dart';
+import '../models/trip_point_record.dart';
 import '../services/api_service.dart';
 import '../services/geocoding_service.dart';
 import '../services/location_service.dart';
@@ -33,14 +38,25 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _retroactivePin;
   RouteResult? _route;
   List<IncidentReport> _reports = [];
+  List<RiskZone> _riskZones = [];
   bool _searching = false;
-  String? _statusMessage;
+
+  // Pesos ajustables por el usuario (seccion 4 del spec). En Fase 3, el
+  // copiloto conversacional podra ajustar estos mismos valores.
+  double _pesoSeguridad = 1.0;
+  double _pesoCongestion = 1.0;
+
+  bool _isNavigating = false;
+  String? _tripId;
+  final List<TripPointRecord> _tripBuffer = [];
+  StreamSubscription<Position>? _positionSubscription;
 
   @override
   void initState() {
     super.initState();
     _initLocation();
     _loadReports();
+    _loadRiskZones();
   }
 
   Future<void> _initLocation() async {
@@ -61,6 +77,16 @@ class _MapScreenState extends State<MapScreen> {
       setState(() => _reports = reports);
     } catch (_) {
       // Falla silenciosa: los reportes son un plus visual, no bloquean el uso del mapa.
+    }
+  }
+
+  Future<void> _loadRiskZones() async {
+    try {
+      final zones = await _apiService.fetchRiskZones();
+      if (!mounted) return;
+      setState(() => _riskZones = zones);
+    } catch (_) {
+      // Falla silenciosa: es una capa informativa (Capa A de Claude), no bloquea el mapa.
     }
   }
 
@@ -91,11 +117,67 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _calculateRoute() async {
     if (_currentLocation == null || _destination == null) return;
     try {
-      final route = await _apiService.fetchRoute(from: _currentLocation!, to: _destination!);
+      final route = await _apiService.fetchRoute(
+        from: _currentLocation!,
+        to: _destination!,
+        pesoSeguridad: _pesoSeguridad,
+        pesoCongestion: _pesoCongestion,
+      );
       if (!mounted) return;
       setState(() => _route = route);
     } catch (e) {
       _showSnackBar('Error calculando ruta: $e');
+    }
+  }
+
+  Future<void> _startNavigation() async {
+    if (_route == null) return;
+    final tripId = DateTime.now().microsecondsSinceEpoch.toString();
+    setState(() {
+      _isNavigating = true;
+      _tripId = tripId;
+      _tripBuffer.clear();
+    });
+
+    try {
+      _positionSubscription = _locationService.watchPositions().listen((position) {
+        if (!mounted) return;
+        setState(() => _currentLocation = LatLng(position.latitude, position.longitude));
+        _tripBuffer.add(TripPointRecord(
+          lat: position.latitude,
+          lon: position.longitude,
+          speedKmh: position.speed * 3.6,
+          recordedAt: DateTime.now(),
+        ));
+      });
+      _showSnackBar('Viaje iniciado: grabando velocidad para mejorar los datos de congestion.');
+    } catch (e) {
+      setState(() => _isNavigating = false);
+      _showSnackBar('No se pudo iniciar la grabacion del viaje: $e');
+    }
+  }
+
+  Future<void> _stopNavigation() async {
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
+
+    final tripId = _tripId;
+    final points = List<TripPointRecord>.from(_tripBuffer);
+    setState(() {
+      _isNavigating = false;
+      _tripId = null;
+      _tripBuffer.clear();
+      _route = null;
+      _destination = null;
+    });
+
+    if (tripId != null && points.isNotEmpty) {
+      try {
+        await _apiService.uploadTrip(tripId: tripId, points: points);
+        _showSnackBar('Trayecto guardado (${points.length} puntos de velocidad).');
+      } catch (e) {
+        _showSnackBar('No se pudo subir el historial del trayecto: $e');
+      }
     }
   }
 
@@ -162,6 +244,8 @@ class _MapScreenState extends State<MapScreen> {
         children: [
           _buildModeToggle(),
           _buildSearchBar(),
+          if (_mode == MapMode.ruta && !_isNavigating) _buildWeightSliders(),
+          if (_mode == MapMode.ruta && _route != null) _buildRouteInfoBar(),
           if (_mode == MapMode.reportarRetroactivo) _buildRetroactiveBanner(),
           Expanded(
             child: Stack(
@@ -178,6 +262,7 @@ class _MapScreenState extends State<MapScreen> {
                       urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'com.rutasegura.app',
                     ),
+                    CircleLayer(circles: _buildRiskCircles()),
                     if (_route != null)
                       PolylineLayer(polylines: [
                         Polyline(points: _route!.points, strokeWidth: 5, color: Colors.blue),
@@ -259,6 +344,93 @@ class _MapScreenState extends State<MapScreen> {
     return markers;
   }
 
+  List<CircleMarker> _buildRiskCircles() {
+    return _riskZones.map((zone) {
+      final color = _riskColor(zone.score);
+      return CircleMarker(
+        point: LatLng(zone.lat, zone.lon),
+        radius: 60,
+        useRadiusInMeter: true,
+        color: color.withOpacity(0.25),
+        borderColor: color,
+        borderStrokeWidth: 2,
+      );
+    }).toList();
+  }
+
+  Color _riskColor(double score) {
+    if (score >= 70) return Colors.red;
+    if (score >= 40) return Colors.orange;
+    return Colors.yellow.shade700;
+  }
+
+  Widget _buildWeightSliders() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.shield_outlined, size: 18),
+              Expanded(
+                child: Slider(
+                  value: _pesoSeguridad,
+                  min: 0,
+                  max: 3,
+                  divisions: 6,
+                  label: 'Priorizar seguridad: ${_pesoSeguridad.toStringAsFixed(1)}',
+                  onChanged: (value) => setState(() => _pesoSeguridad = value),
+                  onChangeEnd: (_) => _calculateRoute(),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              const Icon(Icons.traffic_outlined, size: 18),
+              Expanded(
+                child: Slider(
+                  value: _pesoCongestion,
+                  min: 0,
+                  max: 3,
+                  divisions: 6,
+                  label: 'Evitar congestion: ${_pesoCongestion.toStringAsFixed(1)}',
+                  onChanged: (value) => setState(() => _pesoCongestion = value),
+                  onChangeEnd: (_) => _calculateRoute(),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteInfoBar() {
+    final route = _route!;
+    final minutes = (route.durationSeconds / 60).round();
+    final km = (route.distanceMeters / 1000).toStringAsFixed(1);
+
+    return Container(
+      width: double.infinity,
+      color: Colors.blue.shade50,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '$km km · ~$minutes min · riesgo prom. ${route.avgRiskScore.toStringAsFixed(0)}/100',
+            ),
+          ),
+          if (!_isNavigating)
+            FilledButton(onPressed: _startNavigation, child: const Text('Iniciar viaje'))
+          else
+            OutlinedButton(onPressed: _stopNavigation, child: const Text('Finalizar viaje')),
+        ],
+      ),
+    );
+  }
+
   Widget _buildModeToggle() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -327,6 +499,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _positionSubscription?.cancel();
     super.dispose();
   }
 }

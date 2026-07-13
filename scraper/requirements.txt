@@ -1,0 +1,2 @@
+snscrape @ git+https://github.com/JustAnotherArchivist/snscrape.git
+httpx==0.27.2

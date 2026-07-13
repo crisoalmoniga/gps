@@ -27,11 +27,28 @@ services:
     environment:
       DATABASE_URL: postgresql://rutasegura:rutasegura@postgres:5432/rutasegura
       OSRM_URL: http://osrm:5000
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       - postgres
       - osrm
     ports:
       - "8000:8000"
 
+  # Microservicio aislado del scraper de X (seccion 5.1 del spec). Opt-in
+  # porque depende de scraping fragil y de completar scraper/accounts.py:
+  # levantar con `docker compose --profile scraper up`.
+  scraper:
+    build: ../scraper
+    restart: unless-stopped
+    profiles: ["scraper"]
+    environment:
+      BACKEND_URL: http://backend:8000
+      POLL_INTERVAL_SECONDS: "1800"
+    volumes:
+      - scraper_state:/app/data
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:
+  scraper_state:

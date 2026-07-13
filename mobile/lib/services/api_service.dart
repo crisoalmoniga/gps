@@ -6,7 +6,9 @@ import 'package:latlong2/latlong.dart';
 
 import '../config.dart';
 import '../models/incident_report.dart';
+import '../models/risk_zone.dart';
 import '../models/route_result.dart';
+import '../models/trip_point_record.dart';
 
 class ApiService {
   final String baseUrl;
@@ -72,17 +74,51 @@ class ApiService {
     return list.map((e) => IncidentReport.fromJson(e)).toList();
   }
 
-  Future<RouteResult> fetchRoute({required LatLng from, required LatLng to}) async {
+  Future<RouteResult> fetchRoute({
+    required LatLng from,
+    required LatLng to,
+    double pesoSeguridad = 1.0,
+    double pesoCongestion = 1.0,
+  }) async {
     final uri = Uri.parse('$baseUrl/route').replace(queryParameters: {
       'from_lat': from.latitude.toString(),
       'from_lon': from.longitude.toString(),
       'to_lat': to.latitude.toString(),
       'to_lon': to.longitude.toString(),
+      'peso_seguridad': pesoSeguridad.toString(),
+      'peso_congestion': pesoCongestion.toString(),
     });
     final response = await http.get(uri);
     if (response.statusCode != 200) {
       throw Exception('No se pudo calcular la ruta (${response.statusCode})');
     }
     return RouteResult.fromJson(jsonDecode(response.body));
+  }
+
+  Future<List<RiskZone>> fetchRiskZones({int? hour}) async {
+    final uri = Uri.parse('$baseUrl/risk-zones').replace(
+      queryParameters: hour != null ? {'hour': hour.toString()} : null,
+    );
+    final response = await http.get(uri);
+    if (response.statusCode != 200) {
+      throw Exception('No se pudieron cargar las zonas de riesgo (${response.statusCode})');
+    }
+    final list = jsonDecode(response.body) as List;
+    return list.map((e) => RiskZone.fromJson(e)).toList();
+  }
+
+  Future<void> uploadTrip({required String tripId, required List<TripPointRecord> points}) async {
+    if (points.isEmpty) return;
+    final response = await http.post(
+      Uri.parse('$baseUrl/trips'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'trip_id': tripId,
+        'points': points.map((p) => p.toJson()).toList(),
+      }),
+    );
+    if (response.statusCode != 201) {
+      throw Exception('No se pudo subir el trayecto (${response.statusCode})');
+    }
   }
 }
