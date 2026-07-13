@@ -144,7 +144,10 @@ Para apuntar a un backend real (ej. la VM de Oracle Cloud), pasar su URL en
 
 Funcionalidad ya implementada en la app:
 
-- Mapa con ubicación GPS, búsqueda de destino y ruteo.
+- Mapa con ubicación GPS y ruteo con origen y destino explícitos: por
+  defecto el origen es la ubicación actual, pero se puede buscar una
+  dirección de origen, tocar el mapa (fija destino) o mantener presionado
+  (fija origen) para elegir otro punto de partida/llegada.
 - Sliders de "priorizar seguridad" / "evitar congestión" que ajustan los
   pesos de la fórmula de costo en cada recálculo de ruta.
 - Capa de zonas de riesgo (círculos coloreados por score) sobre el mapa.

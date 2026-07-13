@@ -30,10 +30,17 @@ class _MapScreenState extends State<MapScreen> {
   final _apiService = ApiService();
   final _locationService = LocationService();
   final _geocodingService = GeocodingService();
-  final _searchController = TextEditingController();
+  final _searchController = TextEditingController(); // busqueda de direccion en modo "reportar"
+  final _originController = TextEditingController();
+  final _destinationController = TextEditingController();
 
   MapMode _mode = MapMode.ruta;
   LatLng? _currentLocation;
+
+  /// Origen de la ruta. null significa "usar mi ubicacion actual" (el
+  /// comportamiento por defecto); si el usuario busca o marca un origen
+  /// distinto, se guarda aca.
+  LatLng? _origin;
   LatLng? _destination;
   LatLng? _retroactivePin;
   RouteResult? _route;
@@ -90,35 +97,61 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  Future<void> _handleSearch(String query) async {
+  Future<void> _handleOriginSearch(String query) async {
     if (query.trim().isEmpty) return;
+    final point = await _geocodeOrNull(query);
+    if (point == null) return;
+    setState(() => _origin = point);
+    await _calculateRoute();
+  }
+
+  Future<void> _handleDestinationSearch(String query) async {
+    if (query.trim().isEmpty) return;
+    final point = await _geocodeOrNull(query);
+    if (point == null) return;
+    setState(() => _destination = point);
+    await _calculateRoute();
+  }
+
+  Future<void> _handleRetroactiveSearch(String query) async {
+    if (query.trim().isEmpty) return;
+    final point = await _geocodeOrNull(query);
+    if (point == null) return;
+    setState(() => _retroactivePin = point);
+    _mapController.move(point, 16);
+  }
+
+  Future<LatLng?> _geocodeOrNull(String query) async {
     setState(() => _searching = true);
     try {
       final results = await _geocodingService.search(query);
       if (results.isEmpty) {
         _showSnackBar('No se encontro esa direccion');
-        return;
+        return null;
       }
-      final point = results.first.point;
-      if (_mode == MapMode.ruta) {
-        setState(() => _destination = point);
-        await _calculateRoute();
-      } else {
-        setState(() => _retroactivePin = point);
-        _mapController.move(point, 16);
-      }
+      return results.first.point;
     } catch (e) {
       _showSnackBar('Error buscando direccion: $e');
+      return null;
     } finally {
       if (mounted) setState(() => _searching = false);
     }
   }
 
+  void _resetOriginToCurrentLocation() {
+    setState(() {
+      _origin = null;
+      _originController.clear();
+    });
+    _calculateRoute();
+  }
+
   Future<void> _calculateRoute() async {
-    if (_currentLocation == null || _destination == null) return;
+    final origin = _origin ?? _currentLocation;
+    if (origin == null || _destination == null) return;
     try {
       final route = await _apiService.fetchRoute(
-        from: _currentLocation!,
+        from: origin,
         to: _destination!,
         pesoSeguridad: _pesoSeguridad,
         pesoCongestion: _pesoCongestion,
@@ -168,7 +201,10 @@ class _MapScreenState extends State<MapScreen> {
       _tripId = null;
       _tripBuffer.clear();
       _route = null;
+      _origin = null;
       _destination = null;
+      _originController.clear();
+      _destinationController.clear();
     });
 
     if (tripId != null && points.isNotEmpty) {
@@ -182,8 +218,26 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _handleMapTap(TapPosition tapPosition, LatLng point) {
-    if (_mode != MapMode.reportarRetroactivo) return;
-    setState(() => _retroactivePin = point);
+    if (_mode == MapMode.reportarRetroactivo) {
+      setState(() => _retroactivePin = point);
+      return;
+    }
+    // Modo ruta: un tap fija el destino (igual que en Waze/Google Maps).
+    setState(() {
+      _destination = point;
+      _destinationController.clear();
+    });
+    _calculateRoute();
+  }
+
+  void _handleMapLongPress(TapPosition tapPosition, LatLng point) {
+    if (_mode != MapMode.ruta) return;
+    // Mantener presionado fija el origen, para no pisar el gesto de tap = destino.
+    setState(() {
+      _origin = point;
+      _originController.clear();
+    });
+    _calculateRoute();
   }
 
   Future<void> _submitOneTapReport() async {
@@ -243,7 +297,8 @@ class _MapScreenState extends State<MapScreen> {
       body: Column(
         children: [
           _buildModeToggle(),
-          _buildSearchBar(),
+          if (_mode == MapMode.ruta && !_isNavigating) _buildRouteSearchFields(),
+          if (_mode == MapMode.reportarRetroactivo) _buildRetroactiveSearchBar(),
           if (_mode == MapMode.ruta && !_isNavigating) _buildWeightSliders(),
           if (_mode == MapMode.ruta && _route != null) _buildRouteInfoBar(),
           if (_mode == MapMode.reportarRetroactivo) _buildRetroactiveBanner(),
@@ -256,6 +311,7 @@ class _MapScreenState extends State<MapScreen> {
                     initialCenter: center,
                     initialZoom: 14,
                     onTap: _handleMapTap,
+                    onLongPress: _handleMapLongPress,
                   ),
                   children: [
                     TileLayer(
@@ -307,6 +363,15 @@ class _MapScreenState extends State<MapScreen> {
         width: 40,
         height: 40,
         child: const Icon(Icons.navigation, color: Colors.blue, size: 32),
+      ));
+    }
+
+    if (_origin != null) {
+      markers.add(Marker(
+        point: _origin!,
+        width: 40,
+        height: 40,
+        child: const Icon(Icons.trip_origin, color: Colors.purple, size: 32),
       ));
     }
 
@@ -454,15 +519,66 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget _buildSearchBar() {
+  Widget _buildRouteSearchFields() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        children: [
+          TextField(
+            controller: _originController,
+            decoration: InputDecoration(
+              hintText: 'Origen: mi ubicacion actual',
+              prefixIcon: const Icon(Icons.trip_origin, color: Colors.purple),
+              suffixIcon: _origin != null
+                  ? IconButton(
+                      icon: const Icon(Icons.my_location),
+                      tooltip: 'Usar mi ubicacion actual',
+                      onPressed: _resetOriginToCurrentLocation,
+                    )
+                  : null,
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            onSubmitted: _handleOriginSearch,
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _destinationController,
+            decoration: InputDecoration(
+              hintText: 'Destino',
+              prefixIcon: _searching
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                    )
+                  : const Icon(Icons.location_on, color: Colors.green),
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            onSubmitted: _handleDestinationSearch,
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Tip: toca el mapa para el destino, mantene presionado para el origen.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRetroactiveSearchBar() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: TextField(
         controller: _searchController,
         decoration: InputDecoration(
-          hintText: _mode == MapMode.ruta
-              ? 'Buscar destino...'
-              : 'Buscar direccion del incidente...',
+          hintText: 'Buscar direccion del incidente...',
           prefixIcon: _searching
               ? const Padding(
                   padding: EdgeInsets.all(12),
@@ -471,7 +587,7 @@ class _MapScreenState extends State<MapScreen> {
               : const Icon(Icons.search),
           border: const OutlineInputBorder(),
         ),
-        onSubmitted: _handleSearch,
+        onSubmitted: _handleRetroactiveSearch,
       ),
     );
   }
@@ -499,6 +615,8 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _originController.dispose();
+    _destinationController.dispose();
     _positionSubscription?.cancel();
     super.dispose();
   }
