@@ -17,6 +17,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -63,3 +65,14 @@ jobs:
           name: rutasegura-apk
           path: mobile/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 14
+
+      - name: Publicar release con el APK (link directo, sin zip)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk-latest --yes --cleanup-tag --repo ${{ github.repository }} || true
+          gh release create apk-latest mobile/build/app/outputs/flutter-apk/app-release.apk \
+            --repo ${{ github.repository }} \
+            --title "RutaSegura - APK de prueba" \
+            --notes "Build automatico para probar la app. Backend: ${{ inputs.api_base_url || 'http://10.0.2.2:8000' }} (sin backend desplegado, mapa/GPS/reportes locales funcionan, pero llamadas al servidor van a fallar)." \
+            --prerelease
