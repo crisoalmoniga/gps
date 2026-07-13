@@ -158,9 +158,25 @@ class _MapScreenState extends State<MapScreen> {
       );
       if (!mounted) return;
       setState(() => _route = route);
+      _fitToPoints(route.points);
     } catch (e) {
-      _showSnackBar('Error calculando ruta: $e');
+      _showSnackBar('No se pudo calcular la ruta (¿el backend esta desplegado y accesible?): $e');
+      // Aunque falle el calculo de ruta, centramos el mapa para que origen y
+      // destino sean visibles (si no, el pin de destino puede quedar fuera
+      // de la vista actual y parecer que "no paso nada").
+      _fitToPoints([origin, _destination!]);
     }
+  }
+
+  void _fitToPoints(List<LatLng> points) {
+    if (points.isEmpty) return;
+    if (points.length == 1) {
+      _mapController.move(points.first, 15);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(bounds: LatLngBounds.fromPoints(points), padding: const EdgeInsets.all(60)),
+    );
   }
 
   Future<void> _startNavigation() async {
@@ -328,7 +344,7 @@ class _MapScreenState extends State<MapScreen> {
                 ),
                 Positioned(
                   right: 16,
-                  bottom: 16,
+                  bottom: 16 + MediaQuery.of(context).padding.bottom,
                   child: FloatingActionButton.extended(
                     heroTag: 'one_tap_report',
                     onPressed: _submitOneTapReport,
@@ -339,7 +355,7 @@ class _MapScreenState extends State<MapScreen> {
                 ),
                 Positioned(
                   left: 16,
-                  bottom: 16,
+                  bottom: 16 + MediaQuery.of(context).padding.bottom,
                   child: FloatingActionButton(
                     heroTag: 'recenter',
                     onPressed: _initLocation,
