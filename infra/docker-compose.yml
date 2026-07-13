@@ -50,6 +50,19 @@ services:
     depends_on:
       - backend
 
+  # Expone "backend" a internet sin abrir puertos en el router ni tener IP
+  # publica (self-hosting en una compu de casa, seccion "Deploy" del README).
+  # "Quick tunnel": no requiere cuenta ni tarjeta, genera una URL
+  # https://xxxx.trycloudflare.com al azar en cada arranque (ver logs con
+  # `docker compose logs -f cloudflared`). Opt-in: `docker compose --profile tunnel up`.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --url http://backend:8000
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:
   scraper_state:

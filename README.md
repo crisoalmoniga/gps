@@ -160,7 +160,68 @@ Funcionalidad ya implementada en la app:
   trayecto y la sube a `/trips` al terminar, para alimentar los perfiles
   de congestión.
 
-## Deploy en Oracle Cloud (free tier)
+## Deploy: self-hosting + Cloudflare Tunnel (recomendado, $0 y sin tarjeta)
+
+Oracle Cloud (más abajo) pide tarjeta para verificar identidad, aunque el
+free tier no cobre nada — si no tenés una, este es el camino: correr el
+backend en una compu que puedas dejar prendida (PC, notebook, mini PC) y
+exponerlo a internet gratis con **Cloudflare Tunnel**, sin abrir puertos
+en el router ni depender de tu IP pública.
+
+Ventaja extra: una compu normal es **x86_64/amd64**, así que la imagen
+oficial de OSRM de Docker Hub funciona directo — nada de compilar desde
+código fuente (eso solo hacía falta para la VM ARM de Oracle).
+
+### 1. Preparar la compu
+
+Requiere [Docker](https://docs.docker.com/get-docker/) instalado
+(Docker Desktop en Windows/Mac, Docker Engine en Linux).
+
+```bash
+git clone https://github.com/crisoalmoniga/gps.git
+cd gps
+./infra/osrm/prepare_data.sh   # descarga y procesa los datos de AMBA (~10-20 min)
+cd infra
+docker compose up -d --build
+curl http://localhost:8000/health   # deberia devolver {"status":"ok"}
+```
+
+### 2. Exponerlo a internet con Cloudflare Tunnel
+
+No hace falta cuenta ni tarjeta para esto — un "quick tunnel" te da una URL
+`https://xxxx.trycloudflare.com` al instante:
+
+```bash
+docker compose --profile tunnel up -d cloudflared
+docker compose logs cloudflared   # buscar la linea con la URL https://...trycloudflare.com
+```
+
+Esa URL ya sirve como `API_BASE_URL` para la app — es HTTPS real, sin
+configurar nada de red en tu router.
+
+**Importante**: la URL del quick tunnel cambia cada vez que reiniciás el
+contenedor `cloudflared` (no es fija). Para una URL estable hace falta un
+"named tunnel", que requiere una cuenta gratuita de Cloudflare (sin
+tarjeta) y un dominio propio o gratuito — si en algún momento la URL
+cambiante se vuelve molesta (hay que recompilar el APK cada vez), avisame
+y armamos esa versión.
+
+### 3. Apuntar la app al backend real
+
+Pedime que dispare el workflow de `Build APK` con
+`api_base_url=<la URL de trycloudflare.com>` para generar un APK nuevo
+apuntando ahí.
+
+### Mantenerlo corriendo
+
+- Dejá la compu prendida y conectada — si se apaga o pierde internet, el
+  backend deja de responder para los 4 usuarios de prueba.
+- `docker compose up -d` ya incluye `restart: unless-stopped`, así que si
+  la compu se reinicia (no se apaga), Docker vuelve a levantar todo solo
+  (asumiendo que Docker arranca solo con el sistema, que es el default).
+- Para actualizar después de un cambio de código: `git pull && cd infra && docker compose up -d --build`.
+
+## Alternativa: Oracle Cloud (si más adelante conseguís una tarjeta)
 
 El backend corre en una VM **Ampere A1 (arm64)** del Always Free tier de
 Oracle Cloud — no la VM AMD (`VM.Standard.E2.1.Micro`), que solo tiene 1GB
