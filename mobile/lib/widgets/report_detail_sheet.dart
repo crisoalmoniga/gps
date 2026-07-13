@@ -46,7 +46,7 @@ Future<ReportDetailResult?> showReportDetailSheet(BuildContext context) {
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
                   decoration: const InputDecoration(labelText: 'Tipo de incidente'),
-                  initialValue: incidentType,
+                  value: incidentType,
                   items: kIncidentTypes
                       .map((t) => DropdownMenuItem(value: t, child: Text(t.replaceAll('_', ' '))))
                       .toList(),
@@ -55,7 +55,7 @@ Future<ReportDetailResult?> showReportDetailSheet(BuildContext context) {
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   decoration: const InputDecoration(labelText: 'Gravedad'),
-                  initialValue: severity,
+                  value: severity,
                   items: kSeverityLevels
                       .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                       .toList(),
