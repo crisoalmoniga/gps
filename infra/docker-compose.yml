@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rutasegura
+      POSTGRES_PASSWORD: rutasegura
+      POSTGRES_DB: rutasegura
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+  osrm:
+    image: osrm/osrm-backend
+    restart: unless-stopped
+    command: osrm-routed --algorithm mld /data/amba.osrm
+    volumes:
+      - ./osrm/data:/data
+    ports:
+      - "5001:5000"
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://rutasegura:rutasegura@postgres:5432/rutasegura
+      OSRM_URL: http://osrm:5000
+    depends_on:
+      - postgres
+      - osrm
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:
